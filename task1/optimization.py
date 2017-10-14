@@ -278,7 +278,7 @@ def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
                 d_k = inv(hessian) * gradient
             except:
                 return x_k, 'computational_error', history
-        alpha = line_search_tool.line_search(oracle, x_k, d_k)
+        alpha = line_search_tool.line_search(oracle, x_k, d_k, previous_alpha = 1.0)
         if np.isinf(alpha) or np.isnan(alpha):
             return x_k, 'computational_error', history
         x_k += alpha * d_k
