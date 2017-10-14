@@ -2,7 +2,6 @@ import numpy as np
 import scipy
 from scipy.special import expit
 
-
 class BaseSmoothOracle(object):
     """
     Base class for implementation of oracles.
@@ -102,17 +101,28 @@ class LogRegL2Oracle(BaseSmoothOracle):
         self.regcoef = regcoef
 
     def func(self, x):
-        # TODO: Implement
-        return None
+        a_b_x = self.matvec_Ax(x) * self.b #TODO
+        J = np.sum(np.logaddexp(0, -a_b_x))/float(len(self.b)) + (self.regcoef/float(2)) * np.linalg.norm(x)**2
+        return J
 
     def grad(self, x):
-        # TODO: Implement
-        return None
+        a_b_x = self.matvec_Ax(x) * self.b #TODO
+        sigmoid = lambda x: scipy.special.expit(x)
+        V = self.b * sigmoid(-a_b_x)
+        return -self.matvec_ATx(V)/float(len(self.b)) + self.regcoef * x
 
     def hess(self, x):
-        # TODO: Implement
-        return None
+        a_b_x = self.matvec_Ax(x) * self.b #TODO
+        sigmoid = lambda x: scipy.special.expit(x)
+        s = sigmoid(-a_b_x)
+        V = self.b**2 * s * (1-s)
+        return self.matmat_ATsA(V)/len(self.b) + np.diag([self.regcoef] * x.size)
 
+    def hess_vec(self, x, v):
+        """
+        Computes matrix-vector product with Hessian matrix f''(x) v
+        """
+        return self.hess(x).dot(v)
 
 class LogRegL2OptimizedOracle(LogRegL2Oracle):
     """
@@ -125,13 +135,118 @@ class LogRegL2OptimizedOracle(LogRegL2Oracle):
     def __init__(self, matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef):
         super().__init__(matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef)
 
+    def func(self, x):
+        if not (hasattr(self, 'x') and np.allclose(self.x, x)):
+            if (hasattr(self, 'xad') and np.allclose(self.xad, x)):
+                self.x = self.xad
+                self.Ax = self.Axad
+            else:
+                self.x = x
+                self.Ax = self.matvec_Ax(x)
+        a_b_x = self.Ax * self.b
+        return np.sum(np.logaddexp(0, -a_b_x))/float(len(self.b)) + (self.regcoef/float(2)) * np.linalg.norm(x)**2
+
+    def grad(self, x):
+        if not (hasattr(self, 'x') and np.allclose(self.x, x)):
+            if (hasattr(self, 'xad') and np.allclose(self.xad, x)):
+                self.x = self.xad
+                self.Ax = self.Axad
+            else:
+                self.x = x
+                self.Ax = self.matvec_Ax(x)
+
+        a_b_x = self.Ax * self.b
+        sigmoid = lambda x: scipy.special.expit(x)
+        V = self.b * sigmoid(-a_b_x)
+        return -self.matvec_ATx(V)/float(len(self.b)) + self.regcoef * x
+
+    def hess(self, x):
+        if not (hasattr(self, 'x') and np.allclose(self.x, x)):
+            if (hasattr(self, 'xad') and np.allclose(self.xad, x)):
+                self.x = self.xad
+                self.Ax = self.Axad
+            else:
+                self.x = x
+                self.Ax = self.matvec_Ax(x)
+
+        a_b_x = self.Ax * self.b
+        sigmoid = lambda x: scipy.special.expit(x)
+        s = sigmoid(-a_b_x)
+        V = self.b**2 * s * (1-s)
+        return self.matmat_ATsA(V)/len(self.b) + np.diag([self.regcoef] * x.size)
+
     def func_directional(self, x, d, alpha):
         # TODO: Implement optimized version with pre-computation of Ax and Ad
-        return None
+        if not (hasattr(self, 'x') and np.allclose(self.x, x)):
+            if (hasattr(self, 'xad') and np.allclose(self.xad, x)):
+                self.x = self.xad
+                self.Ax = self.Axad
+            else:
+                self.x = x
+                self.Ax = self.matvec_Ax(x)
+        if not (hasattr(self, 'd') and np.allclose(self.d, d)):
+            self.d = d
+            self.Ad = self.matvec_Ax(d)
+
+        self.Axad = self.Ax + alpha * self.Ad
+        self.xad = self.x + alpha * self.d
+
+        a_b_x = (self.Axad) * self.b
+        return np.sum(np.logaddexp(0, -a_b_x))/float(len(self.b)) + (self.regcoef/float(2)) * np.linalg.norm(self.xad)**2
 
     def grad_directional(self, x, d, alpha):
         # TODO: Implement optimized version with pre-computation of Ax and Ad
-        return None
+        if not (hasattr(self, 'x') and np.allclose(self.x, x)):
+            if (hasattr(self, 'xad') and np.allclose(self.xad, x)):
+                self.x = self.xad
+                self.Ax = self.Axad
+            else:
+                self.x = x
+                self.Ax = self.matvec_Ax(x)
+        if not (hasattr(self, 'd') and np.allclose(self.d, d)):
+            if (hasattr(self, 'xad') and np.allclose(self.xad, d)):
+                self.d = self.xad
+                self.Ad = self.Axad
+            else:
+                self.d = d
+                self.Ad = self.matvec_Ax(d)
+
+        self.Axad = self.Ax + alpha * self.Ad
+        self.xad = self.x + alpha * self.d
+     
+        a_b_x = self.Axad * self.b
+        sigmoid = lambda x: scipy.special.expit(x)
+        V = self.b * sigmoid(-a_b_x)
+        grad = -V/float(len(self.b))
+        return np.squeeze(grad.dot(self.Ad) + self.regcoef * (self.xad).dot(d))
+
+    def hess_vec(self, x, v):
+        """
+        Computes matrix-vector product with Hessian matrix f''(x) v
+        """
+        return self.hess(x).dot(v)
+
+def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
+    """
+    Auxiliary function for creating logistic regression oracles.
+        `oracle_type` must be either 'usual' or 'optimized'
+    """
+    matvec_Ax = lambda x: A * x if scipy.sparse.issparse(A) else A.dot(x)  # TODO: Implement
+    matvec_ATx = lambda x: A.T * x if scipy.sparse.issparse(A) else A.T.dot(x)  # TODO: Implement
+
+    def matmat_ATsA(s):
+        if (scipy.sparse.issparse(A)):
+            return A.T * np.diag(s) * A
+            
+        return A.T.dot(np.diag(s)).dot(A)
+
+    if oracle_type == 'usual':
+        oracle = LogRegL2Oracle
+    elif oracle_type == 'optimized':
+        oracle = LogRegL2OptimizedOracle
+    else:
+        raise 'Unknown oracle_type=%s' % oracle_type
+    return oracle(matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef)
 
 
 def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
@@ -139,12 +254,14 @@ def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
     Auxiliary function for creating logistic regression oracles.
         `oracle_type` must be either 'usual' or 'optimized'
     """
-    matvec_Ax = lambda x: x  # TODO: Implement
-    matvec_ATx = lambda x: x  # TODO: Implement
+    matvec_Ax = lambda x: A * x if scipy.sparse.issparse(A) else A.dot(x)  # TODO: Implement
+    matvec_ATx = lambda x: A.T * x if scipy.sparse.issparse(A) else A.T.dot(x)  # TODO: Implement
 
     def matmat_ATsA(s):
-        # TODO: Implement
-        return None
+        if (scipy.sparse.issparse(A)):
+            return A.T * np.diag(s) * A
+            
+        return A.T.dot(np.diag(s)).dot(A)
 
     if oracle_type == 'usual':
         oracle = LogRegL2Oracle
@@ -161,4 +278,16 @@ def hess_vec_finite_diff(func, x, v, eps=1e-5):
     using finite differences.
     """
     # TODO: Implement numerical estimation of the Hessian times vector
-    return None
+    n = x.size
+    e = eps * np.eye(n)
+    eps_i = np.repeat(e, n, axis = 0).reshape(-1, n)
+    eps_j = np.repeat(np.repeat(eps*v, n, axis = 0).reshape(-1, n), n, axis = 0)
+    x_eps_ij = x + eps_i + eps_j
+    x_eps_i = x + eps_i
+    x_eps_j = x + eps_j
+    f = lambda X: np.array([func(X[i, :]) for i in range(X.shape[0])])#TODO
+    a1 =  f(x_eps_i).reshape(n, n)
+    a2 = f(x_eps_j).reshape(n, n)
+    a3 = np.repeat(func(x), n * n).reshape(n, n)
+    a4 = f(x_eps_ij).reshape(n, n)
+    return np.diag((a4 - a1 - a2 + a3)/(eps**2))
